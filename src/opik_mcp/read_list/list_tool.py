@@ -12,6 +12,7 @@ require their parent id via ``project_id`` / ``test_suite_id`` /
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -28,11 +29,24 @@ from opik_mcp.opik_client import (
 )
 from opik_mcp.read_list.errors import EntityArgValidationError
 from opik_mcp.read_list.registry import ENTITY_REGISTRY, LISTABLE_TYPES, EntityHandler
+from opik_mcp.store import cache_objects
 
 logger = logging.getLogger("opik_mcp.read_list.list")
 
 _MAX_SIZE = 100
 _TRUNCATE_AT = 60
+
+
+def _as_json_str(value: str | list[dict[str, Any]]) -> str:
+    """Normalize a filters/sorting arg to the JSON string the client expects.
+
+    MCP clients may send these clauses either as a JSON-encoded string (the
+    REST convention) or as a native array (many clients coerce JSON-looking
+    text into structured values). Accept both and forward a JSON string.
+    """
+    if isinstance(value, str):
+        return value
+    return json.dumps(value)
 
 
 async def run_list(
@@ -45,6 +59,11 @@ async def run_list(
     project_name: str | None = None,
     test_suite_id: str | None = None,
     prompt_id: str | None = None,
+    filters: str | list[dict[str, Any]] | None = None,
+    sorting: str | list[dict[str, Any]] | None = None,
+    search: str | None = None,
+    from_time: str | None = None,
+    to_time: str | None = None,
     settings: Settings | None = None,
     client: OpikListClient | None = None,
 ) -> str:
@@ -72,6 +91,23 @@ async def run_list(
         kw["test_suite_id"] = test_suite_id
     if prompt_id is not None:
         kw["prompt_id"] = prompt_id
+    # Server-side narrowing params. Both trace and thread lists accept
+    # ``filters`` + ``sorting`` (see OpikListClient.list_traces/list_threads);
+    # ``search`` and ``from_time``/``to_time`` are backed only by the threads
+    # endpoint. Forward each only for the entities that accept it — other
+    # list_fns would reject the unexpected kwargs.
+    if entity_type in ("thread", "trace"):
+        if filters is not None:
+            kw["filters"] = _as_json_str(filters)
+        if sorting is not None:
+            kw["sorting"] = _as_json_str(sorting)
+    if entity_type == "thread":
+        if search is not None:
+            kw["search"] = search
+        if from_time is not None:
+            kw["from_time"] = from_time
+        if to_time is not None:
+            kw["to_time"] = to_time
 
     for required in handler.list_required_kwargs:
         if kw.get(required) is None:
@@ -91,7 +127,12 @@ async def run_list(
 
     try:
         page_body = await handler.list_fn(opik, **kw)
-    except (OpikAuthError, OpikNotFoundError, OpikValidationError, OpikServerError) as e:
+    except (
+        OpikAuthError,
+        OpikNotFoundError,
+        OpikValidationError,
+        OpikServerError,
+    ) as e:
         raise ToolError(f"Failed to list {entity_type}s: {e}") from e
 
     content_raw = page_body.get("content") or []
@@ -103,6 +144,9 @@ async def run_list(
         if name:
             return f"No {entity_type}s matching {name!r} found."
         return f"No {entity_type}s found."
+
+    # Write-through cache (best-effort; never breaks the list path).
+    cache_objects(entity_type, content, settings=settings)
 
     return _format_table(entity_type, handler, content, total, page, size, name)
 
@@ -134,7 +178,9 @@ def _format_table(
         for col in columns:
             val = item.get(col)
             s = "" if val is None else str(val)
-            if len(s) > _TRUNCATE_AT:
+            # Never truncate identifiers — they're needed verbatim for
+            # follow-up read() calls (e.g. thread ids are 64 chars).
+            if col != "id" and len(s) > _TRUNCATE_AT:
                 s = s[: _TRUNCATE_AT - 3] + "..."
             values.append(s)
         rows.append(" | ".join(values))

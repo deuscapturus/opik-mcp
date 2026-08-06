@@ -25,7 +25,10 @@ from opik_mcp.analytics import (
     get_analytics,
     track_event,
 )
-from opik_mcp.analytics.environment import cached_call_context_env, collect_environment_fingerprint
+from opik_mcp.analytics.environment import (
+    cached_call_context_env,
+    collect_environment_fingerprint,
+)
 from opik_mcp.analytics.events import bucket_count, bucket_path
 from opik_mcp.analytics.wrappers import install_tools_listed_emitter, instrument_tool
 from opik_mcp.ask_ollie import AskOllieResult, run_ask_ollie
@@ -37,6 +40,10 @@ from opik_mcp.auth_context import (
     settings_auth_mode,
 )
 from opik_mcp.config import MissingConfigError, Settings, get_settings
+from opik_mcp.insights.docs_tool import run_opik_docs, run_read_skill
+from opik_mcp.insights.plot_tool import run_plot
+from opik_mcp.insights.query_tool import run_query
+from opik_mcp.insights.search_tool import run_search
 from opik_mcp.instructions import render_instructions
 from opik_mcp.oauth_identity import resolve_workspace_name
 from opik_mcp.opik_client import make_opik_client, resolve_opik_config
@@ -139,6 +146,31 @@ def _run_experiment_props(_result: Any, kwargs: dict[str, Any]) -> dict[str, str
             and any(isinstance(p, dict) and bool(p.get("prompt_version_id")) for p in prompts)
         ).lower(),
     }
+
+
+def _query_props(_result: Any, kwargs: dict[str, Any]) -> dict[str, str]:
+    return {
+        "mode": "path" if kwargs.get("path") is not None else "sql",
+    }
+
+
+def _search_props(_result: Any, kwargs: dict[str, Any]) -> dict[str, str]:
+    return {
+        "entity_type": str(kwargs.get("entity_type", "")),
+        "ignore_case": str(bool(kwargs.get("ignore_case", True))).lower(),
+    }
+
+
+def _plot_props(_result: Any, kwargs: dict[str, Any]) -> dict[str, str]:
+    return {"kind": str(kwargs.get("kind", "bar"))}
+
+
+def _opik_docs_props(_result: Any, _kwargs: dict[str, Any]) -> dict[str, str]:
+    return {}
+
+
+def _read_skill_props(_result: Any, _kwargs: dict[str, Any]) -> dict[str, str]:
+    return {}
 
 
 # ``instructions`` (ADR 0004 D6) is FastMCP's surface for the MCP
@@ -291,6 +323,43 @@ async def list_entities(
         str | None,
         Field(description="Required when listing prompt_versions. UUID of the prompt."),
     ] = None,
+    filters: Annotated[
+        str | list[dict[str, Any]] | None,
+        Field(
+            description=(
+                "trace + thread: array of filter clauses applied server-side "
+                "(e.g. on status, duration, or start/end time), like "
+                '[{"field": "status", "operator": "=", "value": "active"}]. '
+                "Accepts either a JSON array or a JSON-encoded string."
+            )
+        ),
+    ] = None,
+    sorting: Annotated[
+        str | list[dict[str, Any]] | None,
+        Field(
+            description=(
+                "trace + thread: array of sort clauses applied server-side, "
+                'e.g. [{"field": "start_time", "direction": "DESC"}]. '
+                "Accepts either a JSON array or a JSON-encoded string."
+            )
+        ),
+    ] = None,
+    search: Annotated[
+        str | None,
+        Field(description="thread-only: free-text search over threads.", max_length=200),
+    ] = None,
+    from_time: Annotated[
+        str | None,
+        Field(
+            description=("thread-only: ISO-8601 lower bound (inclusive) on thread created time.")
+        ),
+    ] = None,
+    to_time: Annotated[
+        str | None,
+        Field(
+            description=("thread-only: ISO-8601 upper bound (exclusive) on thread created time.")
+        ),
+    ] = None,
     ctx: Context[ServerSession, None] | None = None,
 ) -> str:
     """List Opik entities with optional name filter and pagination.
@@ -319,6 +388,11 @@ async def list_entities(
         project_name=project_name,
         test_suite_id=test_suite_id,
         prompt_id=prompt_id,
+        filters=filters,
+        sorting=sorting,
+        search=search,
+        from_time=from_time,
+        to_time=to_time,
     )
 
 
@@ -568,6 +642,169 @@ async def schema(
     if ctx is not None:
         await ctx.info(f"schema.called operation={operation}")
     return run_schema(operation=operation)
+
+
+# --- insight tools (parquet cache + remote docs) ------------------------- #
+
+
+@mcp.tool()
+@instrument_tool("query", props_fn=_query_props)
+async def query(
+    sql: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Read-only DuckDB SELECT/WITH over cached entity views. Each entity "
+                "type read/listed this session is a view (e.g. trace, span, "
+                "experiment); the full JSON of each row is in the '_raw' column and "
+                "can be unpacked with json_extract(_raw, '$.field')."
+            ),
+        ),
+    ] = None,
+    path: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Alternative to sql: a breadcrumb like '.trace.output' (as printed "
+                "in truncated read/list output) to fetch the full un-truncated value."
+            ),
+        ),
+    ] = None,
+    ctx: Context[ServerSession, None] | None = None,
+) -> dict[str, Any]:
+    """Query the local parquet cache of entities you've read or listed.
+
+    Provide exactly one of `sql` or `path`. Results are capped at 200 rows.
+    The cache is populated automatically as you use read() and list().
+
+    Local-only: works when the server runs over stdio; disabled in hosted
+    (HTTP) mode, where the cache has no per-tenant isolation.
+    """
+    if ctx is not None:
+        await ctx.info(f"query.called mode={'path' if path else 'sql'}")
+    return run_query(sql=sql, path=path)
+
+
+@mcp.tool()
+@instrument_tool("search", props_fn=_search_props)
+async def search(
+    entity_type: Annotated[
+        str,
+        Field(description="Cached entity type to search (e.g. trace, span, experiment)."),
+    ],
+    pattern: Annotated[
+        str,
+        Field(
+            description="Python regular expression to match against string values.",
+            min_length=1,
+        ),
+    ],
+    ignore_case: Annotated[
+        bool,
+        Field(description="Case-insensitive matching. Default true."),
+    ] = True,
+    ctx: Context[ServerSession, None] | None = None,
+) -> dict[str, Any]:
+    """Regex-search all string values in cached objects of an entity type.
+
+    Returns up to 100 matches, each with the JSON path (usable as a `query`
+    breadcrumb) and a surrounding snippet. Populate the cache via read()/list().
+
+    Local-only: works when the server runs over stdio; disabled in hosted
+    (HTTP) mode, where the cache has no per-tenant isolation.
+    """
+    if ctx is not None:
+        await ctx.info(f"search.called entity_type={entity_type}")
+    return run_search(entity_type=entity_type, pattern=pattern, ignore_case=ignore_case)
+
+
+@mcp.tool()
+@instrument_tool("plot", props_fn=_plot_props)
+async def plot(
+    sql: Annotated[
+        str,
+        Field(
+            description=(
+                "Read-only SELECT/WITH over cached entity views producing the rows "
+                "to chart (see the query tool for cache/view semantics)."
+            ),
+        ),
+    ],
+    title: Annotated[
+        str,
+        Field(description="Report title.", max_length=200),
+    ] = "Opik report",
+    kind: Annotated[
+        str,
+        Field(
+            description="Chart kind.",
+            json_schema_extra={"enum": ["bar", "line", "scatter"]},
+        ),
+    ] = "bar",
+    x: Annotated[
+        str | None,
+        Field(description="Column for the x axis. Defaults to the first column."),
+    ] = None,
+    y: Annotated[
+        str | None,
+        Field(description="Column for the y axis. Defaults to the second column."),
+    ] = None,
+    ctx: Context[ServerSession, None] | None = None,
+) -> dict[str, Any]:
+    """Render query results into a self-contained HTML report on disk.
+
+    Runs `sql` over the parquet cache and writes an HTML file (inline CSS +
+    vanilla-JS canvas chart + data table) to the reports directory. Returns
+    the file path and a file:// URI.
+
+    Local-only: works when the server runs over stdio; disabled in hosted
+    (HTTP) mode, where the cache has no per-tenant isolation.
+    """
+    if ctx is not None:
+        await ctx.info(f"plot.called kind={kind}")
+    return run_plot(sql, title=title, kind=kind, x=x, y=y)
+
+
+@mcp.tool()
+@instrument_tool("opik_docs", props_fn=_opik_docs_props)
+async def opik_docs(
+    path: Annotated[
+        str,
+        Field(
+            description=(
+                "Docs page path relative to the Opik docs root, e.g. "
+                "'tracing/log_traces' or 'evaluation/overview'."
+            ),
+            min_length=1,
+        ),
+    ],
+    ctx: Context[ServerSession, None] | None = None,
+) -> dict[str, Any]:
+    """Fetch an Opik documentation page by path at call time."""
+    if ctx is not None:
+        await ctx.info(f"opik_docs.called path={path}")
+    return await run_opik_docs(path)
+
+
+@mcp.tool()
+@instrument_tool("read_skill", props_fn=_read_skill_props)
+async def read_skill(
+    name: Annotated[
+        str,
+        Field(
+            description=(
+                "Skill name or path, e.g. 'chronicle' (resolves to chronicle/SKILL.md) "
+                "or an explicit file path like 'chronicle/SKILL.md'."
+            ),
+            min_length=1,
+        ),
+    ],
+    ctx: Context[ServerSession, None] | None = None,
+) -> dict[str, Any]:
+    """Fetch a skill markdown file by name at call time."""
+    if ctx is not None:
+        await ctx.info(f"read_skill.called name={name}")
+    return await run_read_skill(name)
 
 
 # --- middleware ---------------------------------------------------------- #
@@ -1046,7 +1283,9 @@ def _make_composed_lifespan(
             track_event(
                 EVENT_SERVER_STARTED,
                 boot_props.server_started_props(
-                    settings, fingerprint_props=fingerprint_props, lifecycle_source="lifespan"
+                    settings,
+                    fingerprint_props=fingerprint_props,
+                    lifecycle_source="lifespan",
                 ),
             )
         except Exception:
@@ -1065,7 +1304,9 @@ def _make_composed_lifespan(
                 track_event(
                     EVENT_SERVER_SHUTDOWN,
                     boot_props.server_shutdown_props(
-                        reason=reason, elapsed_seconds=elapsed, lifecycle_source="lifespan"
+                        reason=reason,
+                        elapsed_seconds=elapsed,
+                        lifecycle_source="lifespan",
                     ),
                 )
                 # flush() blocks on threading.Event.wait — never block the event

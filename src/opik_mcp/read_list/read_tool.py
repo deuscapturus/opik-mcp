@@ -38,6 +38,7 @@ from opik_mcp.read_list.registry import (
 )
 from opik_mcp.read_list.uri import InvalidURI, looks_like_thread_url, looks_like_uri
 from opik_mcp.read_list.uri import parse as parse_uri
+from opik_mcp.store import cache_objects
 
 logger = logging.getLogger("opik_mcp.read_list.read")
 
@@ -158,6 +159,11 @@ async def run_read(
     data = await _fetch_with_name_lookup(
         handler, opik, id, project_id=project_id, project_name=project_name
     )
+
+    # Write-through cache (best-effort; never breaks the read path). The full
+    # object is stored so the `query`/`search`/`plot` tools can resolve
+    # truncation breadcrumbs against the complete value.
+    cache_objects(entity_type, [data], settings=settings)
 
     compressed_text, tier = compress_for(handler, data, max_tokens)
     full_json = compact_json(data)

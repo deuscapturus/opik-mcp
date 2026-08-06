@@ -21,6 +21,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+analytics = [
+    "pandas>=2.2",
+    "pyarrow>=17",
+    "duckdb>=1.1",
+]
 dev = [
     "anyio>=4.13",
     "asgi-lifespan>=2.1",
@@ -28,6 +33,10 @@ dev = [
     "pytest>=8",
     "respx>=0.21",
     "ruff>=0.7",
+    "pandas>=2.2",
+    "pyarrow>=17",
+    "duckdb>=1.1",
+    "pandas-stubs>=2.2",
 ]
 
 [project.scripts]

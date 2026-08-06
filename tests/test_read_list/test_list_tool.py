@@ -124,6 +124,18 @@ async def test_list_truncates_long_values_at_sixty_chars() -> None:
     assert "x" * 60 not in out  # truncated form is 57 chars + "..."
 
 
+@pytest.mark.anyio
+async def test_list_never_truncates_id_column() -> None:
+    # Thread ids are 64 chars (uuid_startms_endms) and must survive verbatim
+    # so they can be used in a follow-up read() call.
+    long_id = "94a844d8-0001-702f-dc76-49b948c13423_1785938524962_1785939000000"
+    fake = FakeOpikClient(
+        projects={"content": [{"id": long_id, "name": "n"}], "total": 1},
+    )
+    out = await run_list("project", client=fake)
+    assert long_id in out
+
+
 # --- required kwargs ----------------------------------------------------- #
 
 
@@ -166,6 +178,89 @@ async def test_list_threads_accepts_project_name_alternative() -> None:
     assert fake.last_kwargs.get("project_name") == "support-bot"
     assert "project_id" not in fake.last_kwargs
     assert "th-1" in out
+
+
+@pytest.mark.anyio
+async def test_list_threads_forwards_narrowing_params() -> None:
+    fake = FakeOpikClient(threads={"content": [], "total": 0})
+    await run_list(
+        "thread",
+        project_id="p-1",
+        filters='[{"field":"status"}]',
+        sorting='[{"field":"start_time"}]',
+        search="hello",
+        from_time="2024-01-01T00:00:00Z",
+        to_time="2024-02-01T00:00:00Z",
+        client=fake,
+    )
+    assert fake.last_kwargs.get("filters") == '[{"field":"status"}]'
+    assert fake.last_kwargs.get("sorting") == '[{"field":"start_time"}]'
+    assert fake.last_kwargs.get("search") == "hello"
+    assert fake.last_kwargs.get("from_time") == "2024-01-01T00:00:00Z"
+    assert fake.last_kwargs.get("to_time") == "2024-02-01T00:00:00Z"
+
+
+@pytest.mark.anyio
+async def test_list_traces_forwards_filters_and_sorting() -> None:
+    fake = FakeOpikClient(traces={"content": [], "total": 0})
+    await run_list(
+        "trace",
+        project_id="p-1",
+        filters='[{"field":"status"}]',
+        sorting='[{"field":"start_time"}]',
+        client=fake,
+    )
+    assert fake.last_kwargs.get("filters") == '[{"field":"status"}]'
+    assert fake.last_kwargs.get("sorting") == '[{"field":"start_time"}]'
+
+
+@pytest.mark.anyio
+async def test_list_normalizes_native_list_filters_and_sorting() -> None:
+    """filters/sorting passed as native lists are JSON-encoded before forwarding."""
+    fake = FakeOpikClient(threads={"content": [], "total": 0})
+    await run_list(
+        "thread",
+        project_id="p-1",
+        filters=[{"field": "end_time", "operator": ">=", "value": "2026-08-05T00:00:00Z"}],
+        sorting=[{"field": "end_time", "direction": "DESC"}],
+        client=fake,
+    )
+    assert fake.last_kwargs.get("filters") == (
+        '[{"field": "end_time", "operator": ">=", "value": "2026-08-05T00:00:00Z"}]'
+    )
+    assert fake.last_kwargs.get("sorting") == '[{"field": "end_time", "direction": "DESC"}]'
+
+
+@pytest.mark.anyio
+async def test_list_trace_ignores_thread_only_params() -> None:
+    """search/from_time/to_time are backed only by the threads endpoint."""
+    fake = FakeOpikClient(traces={"content": [], "total": 0})
+    await run_list(
+        "trace",
+        project_id="p-1",
+        search="hello",
+        from_time="2024-01-01T00:00:00Z",
+        to_time="2024-02-01T00:00:00Z",
+        client=fake,
+    )
+    for key in ("search", "from_time", "to_time"):
+        assert key not in fake.last_kwargs
+
+
+@pytest.mark.anyio
+async def test_list_non_project_ignores_narrowing_params() -> None:
+    """Narrowing params must not leak into non-trace/thread list_fn kwargs."""
+    fake = FakeOpikClient(experiments={"content": [], "total": 0})
+    await run_list(
+        "experiment",
+        filters='[{"field":"status"}]',
+        sorting='[{"field":"start_time"}]',
+        search="hello",
+        from_time="2024-01-01T00:00:00Z",
+        client=fake,
+    )
+    for key in ("filters", "sorting", "search", "from_time", "to_time"):
+        assert key not in fake.last_kwargs
 
 
 @pytest.mark.anyio

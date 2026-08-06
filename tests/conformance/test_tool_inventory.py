@@ -1,4 +1,4 @@
-"""Conformance — the exact-six-tools rule.
+"""Conformance — the exact-tool-surface rule.
 
 `tools/list` is part of the public MCP contract. Adding a tool is a
 major-version change (every host caches the list); removing one breaks
@@ -22,6 +22,11 @@ EXPECTED_TOOLS: frozenset[str] = frozenset(
         "schema",
         "ask_ollie",
         "run_experiment",
+        "query",
+        "search",
+        "plot",
+        "opik_docs",
+        "read_skill",
     }
 )
 

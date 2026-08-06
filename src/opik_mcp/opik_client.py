@@ -116,6 +116,9 @@ class OpikListClient(Protocol):
         project_id: str | None = None,
         project_name: str | None = None,
         filters: str | None = None,
+        sorting: str | None = None,
+        truncate: bool | None = None,
+        exclude: list[str] | None = None,
         page: int = 1,
         size: int = 10,
     ) -> dict[str, Any]: ...
@@ -125,6 +128,11 @@ class OpikListClient(Protocol):
         *,
         project_id: str | None = None,
         project_name: str | None = None,
+        filters: str | None = None,
+        sorting: str | None = None,
+        search: str | None = None,
+        from_time: str | None = None,
+        to_time: str | None = None,
         page: int = 1,
         size: int = 10,
     ) -> dict[str, Any]: ...
@@ -338,6 +346,9 @@ class OpikClient:
         project_id: str | None = None,
         project_name: str | None = None,
         filters: str | None = None,
+        sorting: str | None = None,
+        truncate: bool | None = None,
+        exclude: list[str] | None = None,
         page: int = 1,
         size: int = 10,
     ) -> dict[str, Any]:
@@ -345,8 +356,16 @@ class OpikClient:
 
         ``filters`` is the backend's JSON-encoded filter array (query param),
         e.g. ``[{"field":"thread_id","operator":"=","value":"<id>"}]`` — used
-        by the thread read to pull a thread's messages. Forwarded only when set;
-        the ``list`` tool never passes it.
+        by the thread read to pull a thread's messages and by the ``list`` tool
+        for server-side trace narrowing (status, duration, start/end time, …).
+        ``sorting`` is the backend's JSON-encoded sort array, e.g.
+        ``[{"field":"start_time","direction":"DESC"}]``. Both forwarded only
+        when set.
+
+        ``truncate`` slims ``input``/``output``/``metadata`` to short payloads.
+        ``exclude`` drops whole fields from each trace (JSON-array query param,
+        e.g. ``["metadata","tags"]``). Both forwarded only when set; used by the
+        thread read to shrink the per-trace payloads it assembles into messages.
         """
         if project_id is None and project_name is None:
             raise ValueError("list_traces requires project_id or project_name")
@@ -357,6 +376,12 @@ class OpikClient:
             params["project_name"] = project_name
         if filters is not None:
             params["filters"] = filters
+        if sorting is not None:
+            params["sorting"] = sorting
+        if truncate is not None:
+            params["truncate"] = truncate
+        if exclude:
+            params["exclude"] = _json.dumps(list(exclude))
         return await self._get_json("/v1/private/traces", params=params, entity_hint="traces")
 
     async def get_trace(self, trace_id: str) -> dict[str, Any]:
@@ -372,6 +397,11 @@ class OpikClient:
         *,
         project_id: str | None = None,
         project_name: str | None = None,
+        filters: str | None = None,
+        sorting: str | None = None,
+        search: str | None = None,
+        from_time: str | None = None,
+        to_time: str | None = None,
         page: int = 1,
         size: int = 10,
     ) -> dict[str, Any]:
@@ -380,6 +410,12 @@ class OpikClient:
         A thread groups traces by ``thread_id`` within one project, so listing
         requires ``project_id`` or ``project_name`` (like ``list_traces``).
         Returns a Spring Page envelope ``{content, page, size, total}``.
+
+        The backend also accepts server-side narrowing params, each forwarded
+        only when set: ``filters`` (JSON-encoded filter array, e.g. on
+        ``status`` or ``end_time``), ``sorting`` (JSON-encoded sort array),
+        ``search`` (free-text), and ``from_time``/``to_time`` (ISO-8601 window
+        on thread CREATED time). Prefer these over paging-all + client filtering.
         """
         if project_id is None and project_name is None:
             raise ValueError("list_threads requires project_id or project_name")
@@ -388,6 +424,16 @@ class OpikClient:
             params["project_id"] = project_id
         if project_name is not None:
             params["project_name"] = project_name
+        if filters is not None:
+            params["filters"] = filters
+        if sorting is not None:
+            params["sorting"] = sorting
+        if search is not None:
+            params["search"] = search
+        if from_time is not None:
+            params["from_time"] = from_time
+        if to_time is not None:
+            params["to_time"] = to_time
         return await self._get_json(
             "/v1/private/traces/threads",
             params=params,

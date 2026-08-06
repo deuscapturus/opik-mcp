@@ -54,7 +54,12 @@ class FakeOpikClient:
         size: int = 10,
     ) -> dict[str, Any]:
         content = self.projects_by_name.get(name or "", [])
-        return {"content": content, "page": page, "size": len(content), "total": len(content)}
+        return {
+            "content": content,
+            "page": page,
+            "size": len(content),
+            "total": len(content),
+        }
 
     async def get_trace(self, trace_id: str) -> dict[str, Any]:
         if trace_id not in self.traces_by_id:
@@ -71,7 +76,12 @@ class FakeOpikClient:
         size: int = 100,
     ) -> dict[str, Any]:
         content = self.trace_spans.get(trace_id, [])
-        return {"content": content, "page": page, "size": len(content), "total": len(content)}
+        return {
+            "content": content,
+            "page": page,
+            "size": len(content),
+            "total": len(content),
+        }
 
     async def get_span(self, span_id: str) -> dict[str, Any]:
         return self.spans_by_id[span_id]
@@ -87,7 +97,12 @@ class FakeOpikClient:
         size: int = 10,
     ) -> dict[str, Any]:
         content = self.experiments_by_name.get(name or "", [])
-        return {"content": content, "page": page, "size": len(content), "total": len(content)}
+        return {
+            "content": content,
+            "page": page,
+            "size": len(content),
+            "total": len(content),
+        }
 
     async def get_test_suite(self, test_suite_id: str) -> dict[str, Any]:
         return self.test_suites_by_id[test_suite_id]
@@ -106,7 +121,12 @@ class FakeOpikClient:
         size: int = 10,
     ) -> dict[str, Any]:
         content = self.prompt_versions.get(prompt_id, [])
-        return {"content": content, "page": page, "size": len(content), "total": len(content)}
+        return {
+            "content": content,
+            "page": page,
+            "size": len(content),
+            "total": len(content),
+        }
 
     async def list_prompts(self, **_: Any) -> dict[str, Any]:
         return {"content": [], "page": 1, "size": 0, "total": 0}
@@ -129,6 +149,8 @@ class FakeOpikClient:
         project_id: str | None = None,
         project_name: str | None = None,
         filters: str | None = None,
+        truncate: bool | None = None,
+        exclude: list[str] | None = None,
         page: int = 1,
         size: int = 10,
     ) -> dict[str, Any]:
@@ -276,8 +298,18 @@ def _thread_fake() -> FakeOpikClient:
         threads_by_id={THREAD: _THREAD_META},
         thread_messages={
             THREAD: [
-                {"id": "tr-2", "name": "turn2", "input": "b", "start_time": "2026-01-02"},
-                {"id": "tr-1", "name": "turn1", "input": "a", "start_time": "2026-01-01"},
+                {
+                    "id": "tr-2",
+                    "name": "turn2",
+                    "input": "b",
+                    "start_time": "2026-01-02",
+                },
+                {
+                    "id": "tr-1",
+                    "name": "turn1",
+                    "input": "a",
+                    "start_time": "2026-01-01",
+                },
             ]
         },
     )

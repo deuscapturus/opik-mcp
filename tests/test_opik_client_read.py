@@ -120,6 +120,34 @@ async def test_list_traces_forwards_filters_only_when_set() -> None:
     assert dict(route.calls.last.request.url.params).get("filters") == filt
 
 
+@pytest.mark.anyio
+async def test_list_traces_forwards_sorting_only_when_set() -> None:
+    with respx.mock(base_url=OPIK_BASE) as mock:
+        route = mock.get("/v1/private/traces").mock(
+            return_value=httpx.Response(200, json=_page([])),
+        )
+        await _client().list_traces(project_id="p-1")  # no sorting
+        assert "sorting" not in dict(route.calls.last.request.url.params)
+
+        sort = '[{"field":"start_time","direction":"DESC"}]'
+        await _client().list_traces(project_id="p-1", sorting=sort)
+    assert dict(route.calls.last.request.url.params).get("sorting") == sort
+
+
+@pytest.mark.anyio
+async def test_list_traces_encodes_exclude_as_json_array() -> None:
+    with respx.mock(base_url=OPIK_BASE) as mock:
+        route = mock.get("/v1/private/traces").mock(
+            return_value=httpx.Response(200, json=_page([])),
+        )
+        await _client().list_traces(project_id="p-1")  # no exclude
+        assert "exclude" not in dict(route.calls.last.request.url.params)
+
+        await _client().list_traces(project_id="p-1", exclude=["metadata", "tags"])
+    # The backend requires a JSON-encoded array, not a comma-joined string.
+    assert dict(route.calls.last.request.url.params).get("exclude") == ('["metadata", "tags"]')
+
+
 # --- threads -------------------------------------------------------------- #
 
 
@@ -139,6 +167,35 @@ async def test_list_threads_hits_project_scoped_path() -> None:
     params = dict(route.calls.last.request.url.params)
     assert params == {"project_id": "p-1", "page": "1", "size": "25"}
     assert body["content"][0]["id"] == "th-1"
+
+
+@pytest.mark.anyio
+async def test_list_threads_forwards_narrowing_params_only_when_set() -> None:
+    with respx.mock(base_url=OPIK_BASE) as mock:
+        route = mock.get("/v1/private/traces/threads").mock(
+            return_value=httpx.Response(200, json=_page([])),
+        )
+        await _client().list_threads(project_id="p-1")  # no narrowing params
+        bare = dict(route.calls.last.request.url.params)
+        for key in ("filters", "sorting", "search", "from_time", "to_time"):
+            assert key not in bare
+
+        filt = '[{"field":"status","operator":"=","value":"active"}]'
+        sort = '[{"field":"start_time","direction":"DESC"}]'
+        await _client().list_threads(
+            project_id="p-1",
+            filters=filt,
+            sorting=sort,
+            search="hello",
+            from_time="2024-01-01T00:00:00Z",
+            to_time="2024-02-01T00:00:00Z",
+        )
+    params = dict(route.calls.last.request.url.params)
+    assert params.get("filters") == filt
+    assert params.get("sorting") == sort
+    assert params.get("search") == "hello"
+    assert params.get("from_time") == "2024-01-01T00:00:00Z"
+    assert params.get("to_time") == "2024-02-01T00:00:00Z"
 
 
 @pytest.mark.anyio

@@ -46,6 +46,19 @@ SPANS_INLINE_LIMIT = 200
 VERSIONS_INLINE_LIMIT = 100
 MESSAGES_INLINE_LIMIT = 200
 
+# Trace fields the thread transcript never projects (see ``_thread_messages``).
+# Excluding them slims each trace payload without losing message content.
+# ``metadata`` is usually the heaviest offender.
+THREAD_MESSAGE_EXCLUDE_FIELDS = [
+    "metadata",
+    "tags",
+    "span_feedback_scores",
+    "comments",
+    "guardrails_validations",
+    "experiment",
+    "providers",
+]
+
 # ``FetchFn`` is widened to ``...`` so project-scoped fetchers (only ``thread``
 # today) can accept ``project_id`` / ``project_name`` kwargs. Every other
 # fetcher is still ``(client, id)`` and is called positionally; only the
@@ -224,6 +237,7 @@ async def _fetch_thread(
             project_id=project_id,
             project_name=project_name,
             filters=filters,
+            exclude=THREAD_MESSAGE_EXCLUDE_FIELDS,
             page=1,
             size=MESSAGES_INLINE_LIMIT,
         )

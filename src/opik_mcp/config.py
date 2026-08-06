@@ -1,4 +1,5 @@
 from functools import lru_cache
+from pathlib import Path
 from typing import Any, ClassVar, Literal
 from urllib.parse import urlparse
 from uuid import UUID
@@ -131,6 +132,21 @@ class Settings(BaseSettings):
 
     opik_mcp_reload: bool = False
 
+    # Parquet-backed local cache for read/list results (write-through on every
+    # call, fail-soft) + the query/search/plot tools that read from it. Unset =
+    # default under ~/.opik-mcp. Override for ephemeral/containerized runs.
+    opik_mcp_data_dir: str | None = None
+
+    # Base URL for the `opik_docs` tool. The tool appends the caller-supplied
+    # path/slug and fetches the page at runtime (nothing is bundled).
+    opik_mcp_docs_base_url: str = "https://www.comet.com/docs/opik"
+
+    # Raw base URL for the `read_skill` tool — skill files are fetched from
+    # here at runtime. Defaults to the opik-mcp repo's skills tree on main.
+    opik_mcp_skills_base_url: str = (
+        "https://raw.githubusercontent.com/comet-ml/opik-mcp/main/skills"
+    )
+
     # YOLO mode toggle. "enabled" (default) auto-approves every pod
     # `confirm_required` (audit row written before the confirm POST). "disabled"
     # surfaces each confirm_required to the host LLM as a typed pod-stream error
@@ -168,6 +184,32 @@ class Settings(BaseSettings):
     @property
     def allowed_origins_list(self) -> list[str]:
         return [o.strip() for o in self.opik_mcp_allowed_origins.split(",") if o.strip()]
+
+    @property
+    def data_dir(self) -> Path:
+        """Root of the local parquet cache. Created lazily by the store."""
+        if self.opik_mcp_data_dir:
+            return Path(self.opik_mcp_data_dir).expanduser()
+        return Path.home() / ".opik-mcp" / "cache"
+
+    @property
+    def reports_dir(self) -> Path:
+        """Directory where the `plot` tool writes self-contained HTML reports."""
+        return self.data_dir.parent / "reports"
+
+    @property
+    def local_persistence_enabled(self) -> bool:
+        """Whether the local parquet cache (and query/search/plot) is active.
+
+        Gated on transport, which is a correctness boundary rather than a
+        heuristic: the cache is a single unpartitioned directory on the machine
+        running the server, so it is only sound for the single-tenant ``stdio``
+        transport (the client spawns the process, one user by construction). In
+        hosted ``http`` mode there is no per-tenant isolation, so the
+        write-through cache no-ops and the insight tools refuse with a clear
+        message.
+        """
+        return self.opik_mcp_transport.strip().lower() == "stdio"
 
     @field_validator("comet_workspace_id", mode="before")
     @classmethod

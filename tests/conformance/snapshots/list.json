@@ -15,6 +15,39 @@
       "title": "Entity Type",
       "type": "string"
     },
+    "filters": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "trace + thread: array of filter clauses applied server-side (e.g. on status, duration, or start/end time), like [{\"field\": \"status\", \"operator\": \"=\", \"value\": \"active\"}]. Accepts either a JSON array or a JSON-encoded string.",
+      "title": "Filters"
+    },
+    "from_time": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "thread-only: ISO-8601 lower bound (inclusive) on thread created time.",
+      "title": "From Time"
+    },
     "name": {
       "anyOf": [
         {
@@ -77,6 +110,20 @@
       "description": "Required when listing prompt_versions. UUID of the prompt.",
       "title": "Prompt Id"
     },
+    "search": {
+      "anyOf": [
+        {
+          "maxLength": 200,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "thread-only: free-text search over threads.",
+      "title": "Search"
+    },
     "size": {
       "default": 25,
       "description": "Items per page. Capped at 100.",
@@ -84,6 +131,26 @@
       "minimum": 1,
       "title": "Size",
       "type": "integer"
+    },
+    "sorting": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "trace + thread: array of sort clauses applied server-side, e.g. [{\"field\": \"start_time\", \"direction\": \"DESC\"}]. Accepts either a JSON array or a JSON-encoded string.",
+      "title": "Sorting"
     },
     "test_suite_id": {
       "anyOf": [
@@ -97,6 +164,19 @@
       "default": null,
       "description": "Required when listing test_suite_items. UUID of the suite.",
       "title": "Test Suite Id"
+    },
+    "to_time": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "thread-only: ISO-8601 upper bound (exclusive) on thread created time.",
+      "title": "To Time"
     }
   },
   "required": [
