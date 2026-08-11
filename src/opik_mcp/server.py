@@ -47,7 +47,7 @@ from opik_mcp.insights.search_tool import run_search
 from opik_mcp.instructions import render_instructions
 from opik_mcp.oauth_identity import resolve_workspace_name
 from opik_mcp.opik_client import make_opik_client, resolve_opik_config
-from opik_mcp.read_list import run_list, run_read
+from opik_mcp.read_list import run_list, run_read, run_thread_transcript
 from opik_mcp.read_list.registry import LISTABLE_TYPES, READABLE_TYPES
 from opik_mcp.read_list.uri import looks_like_thread_url
 from opik_mcp.run_experiment import run_experiment_impl
@@ -101,6 +101,13 @@ def _list_props(_result: Any, kwargs: dict[str, Any]) -> dict[str, str]:
     }
 
 
+def _thread_transcript_props(_result: Any, kwargs: dict[str, Any]) -> dict[str, str]:
+    return {
+        "had_project_id": str(kwargs.get("project_id") is not None).lower(),
+        "had_project_name": str(kwargs.get("project_name") is not None).lower(),
+    }
+
+
 def _write_props(_result: Any, kwargs: dict[str, Any]) -> dict[str, str]:
     """Analytics labels for the universal write tool.
 
@@ -129,7 +136,9 @@ def _ask_ollie_props(_result: Any, kwargs: dict[str, Any]) -> dict[str, str]:
         "had_continuation": str(kwargs.get("thread_id") is not None).lower(),
         "had_page_context": str(kwargs.get("page_context") is not None).lower(),
         "had_project_name": str(kwargs.get("project_name") is not None).lower(),
-        "attach_resources_count": bucket_count(len(kwargs.get("attach_resources") or [])),
+        "attach_resources_count": bucket_count(
+            len(kwargs.get("attach_resources") or [])
+        ),
     }
 
 
@@ -137,13 +146,18 @@ def _run_experiment_props(_result: Any, kwargs: dict[str, Any]) -> dict[str, str
     cfg = kwargs.get("experiment_config") or {}
     prompts = cfg.get("prompts") if isinstance(cfg, dict) else None
     return {
-        "prompt_count_bucket": bucket_count(len(prompts) if isinstance(prompts, list) else 0),
+        "prompt_count_bucket": bucket_count(
+            len(prompts) if isinstance(prompts, list) else 0
+        ),
         "had_dataset_version_id": str(
             isinstance(cfg, dict) and bool(cfg.get("dataset_version_id"))
         ).lower(),
         "had_prompt_version": str(
             isinstance(prompts, list)
-            and any(isinstance(p, dict) and bool(p.get("prompt_version_id")) for p in prompts)
+            and any(
+                isinstance(p, dict) and bool(p.get("prompt_version_id"))
+                for p in prompts
+            )
         ).lower(),
     }
 
@@ -268,6 +282,70 @@ async def read(
     )
 
 
+@mcp.tool()
+@instrument_tool("get_thread_transcript", props_fn=_thread_transcript_props)
+async def get_thread_transcript(
+    thread_id: Annotated[
+        str,
+        Field(
+            description="Thread identifier shared by the traces in the conversation.",
+            min_length=1,
+            max_length=200,
+        ),
+    ],
+    project_id: Annotated[
+        str | None,
+        Field(description="Project UUID. Pass this or project_name."),
+    ] = None,
+    project_name: Annotated[
+        str | None,
+        Field(description="Project name. Pass this or project_id.", max_length=200),
+    ] = None,
+    input_key: Annotated[
+        str,
+        Field(
+            description=(
+                "Dot-separated path in each trace to LangChain input messages. "
+                "Defaults to input."
+            ),
+            min_length=1,
+            max_length=200,
+        ),
+    ] = "input",
+    output_key: Annotated[
+        str,
+        Field(
+            description=(
+                "Dot-separated path in each trace to LangChain output messages. "
+                "Defaults to output."
+            ),
+            min_length=1,
+            max_length=200,
+        ),
+    ] = "output",
+    ctx: Context[ServerSession, None] | None = None,
+) -> str:
+    """Return a compact plain-text transcript for a LangChain conversation thread.
+
+    Retrieves every trace matching ``thread_id``, writes the complete trace
+    records into the local read-through cache, and returns only message text.
+    The renderer uses each trace's ``metadata.created_from`` discriminator;
+    currently ``langchain`` is supported, including BaseMessage role prefixes
+    such as ``User:`` and ``Assistant:``. Set ``input_key`` and ``output_key``
+    when a project stores messages at custom trace paths. No trace JSON or
+    metadata is returned.
+    """
+    if ctx is not None:
+        await ctx.info("get_thread_transcript.called")
+    return await run_thread_transcript(
+        thread_id,
+        project_id=project_id,
+        project_name=project_name,
+        input_key=input_key,
+        output_key=output_key,
+    )
+
+
 @mcp.tool(name="list")
 @instrument_tool("list", props_fn=_list_props)
 async def list_entities(
@@ -346,18 +424,24 @@ async def list_entities(
     ] = None,
     search: Annotated[
         str | None,
-        Field(description="thread-only: free-text search over threads.", max_length=200),
+        Field(
+            description="thread-only: free-text search over threads.", max_length=200
+        ),
     ] = None,
     from_time: Annotated[
         str | None,
         Field(
-            description=("thread-only: ISO-8601 lower bound (inclusive) on thread created time.")
+            description=(
+                "thread-only: ISO-8601 lower bound (inclusive) on thread created time."
+            )
         ),
     ] = None,
     to_time: Annotated[
         str | None,
         Field(
-            description=("thread-only: ISO-8601 upper bound (exclusive) on thread created time.")
+            description=(
+                "thread-only: ISO-8601 upper bound (exclusive) on thread created time."
+            )
         ),
     ] = None,
     ctx: Context[ServerSession, None] | None = None,
@@ -618,7 +702,9 @@ async def write(
 ) -> dict[str, Any]:
     if ctx is not None:
         is_batch = isinstance(data, list)
-        await ctx.info(f"write.called operation={operation} batch={is_batch} dry_run={dry_run}")
+        await ctx.info(
+            f"write.called operation={operation} batch={is_batch} dry_run={dry_run}"
+        )
     return await run_write(
         operation=operation,
         data=data,
@@ -690,7 +776,9 @@ async def query(
 async def search(
     entity_type: Annotated[
         str,
-        Field(description="Cached entity type to search (e.g. trace, span, experiment)."),
+        Field(
+            description="Cached entity type to search (e.g. trace, span, experiment)."
+        ),
     ],
     pattern: Annotated[
         str,
@@ -898,7 +986,9 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
         super().__init__(app)
         self._resource_metadata_url = resource_metadata_url
 
-    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+    async def dispatch(
+        self, request: Request, call_next: RequestResponseEndpoint
+    ) -> Response:
         path = request.url.path
         # Discovery + bootstrap paths are unauthenticated by spec — RFC 9728
         # well-known metadata, OIDC/OAuth AS metadata, and the OAuth-flow
@@ -933,7 +1023,10 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
         # session id and skip this. Best-effort: a failure leaves the blob on its
         # static fallback and never blocks the handshake.
         resolved_token = None
-        if request.headers.get("mcp-session-id") is None and classify_bearer(auth)[0] == "oauth":
+        if (
+            request.headers.get("mcp-session-id") is None
+            and classify_bearer(auth)[0] == "oauth"
+        ):
             workspace_name = await resolve_workspace_name(auth, get_settings())
             if workspace_name:
                 resolved_token = resolved_workspace_name.set(workspace_name)
@@ -1127,7 +1220,9 @@ async def _oauth_protected_resource(_request: Request) -> JSONResponse:
     """
     s = get_settings()
     if not s.opik_mcp_as_url:
-        return JSONResponse({"error": "OPIK_MCP_AS_URL not configured"}, status_code=503)
+        return JSONResponse(
+            {"error": "OPIK_MCP_AS_URL not configured"}, status_code=503
+        )
     body: dict[str, Any] = {
         "authorization_servers": [s.opik_mcp_as_url],
     }
@@ -1177,7 +1272,9 @@ async def _proxy_to_as(request: Request) -> Response:
     """
     s = get_settings()
     if not s.opik_mcp_as_url:
-        return JSONResponse({"error": "OPIK_MCP_AS_URL not configured"}, status_code=503)
+        return JSONResponse(
+            {"error": "OPIK_MCP_AS_URL not configured"}, status_code=503
+        )
     target_path = _PROXIED_OAUTH_PATHS.get(request.url.path)
     if target_path is None:
         return JSONResponse({"error": "not found"}, status_code=404)
@@ -1187,7 +1284,9 @@ async def _proxy_to_as(request: Request) -> Response:
         target = f"{target}?{qs}"
     body = await request.body()
     forwarded_headers = {
-        k: v for k, v in request.headers.items() if k.lower() not in _PROXY_DROP_REQUEST_HEADERS
+        k: v
+        for k, v in request.headers.items()
+        if k.lower() not in _PROXY_DROP_REQUEST_HEADERS
     }
     async with httpx.AsyncClient(timeout=30.0, follow_redirects=False) as client:
         upstream = await client.request(
@@ -1197,7 +1296,9 @@ async def _proxy_to_as(request: Request) -> Response:
             content=body,
         )
     response_headers = {
-        k: v for k, v in upstream.headers.items() if k.lower() not in _PROXY_DROP_RESPONSE_HEADERS
+        k: v
+        for k, v in upstream.headers.items()
+        if k.lower() not in _PROXY_DROP_RESPONSE_HEADERS
     }
     return Response(
         content=upstream.content,
@@ -1226,7 +1327,9 @@ def _resource_metadata_url(settings: Settings) -> str | None:
     if settings.opik_mcp_resource_uri:
         parsed = urlparse(settings.opik_mcp_resource_uri)
         if parsed.scheme and parsed.netloc:
-            return f"{parsed.scheme}://{parsed.netloc}{_PROTECTED_RESOURCE_METADATA_PATH}"
+            return (
+                f"{parsed.scheme}://{parsed.netloc}{_PROTECTED_RESOURCE_METADATA_PATH}"
+            )
     return _PROTECTED_RESOURCE_METADATA_PATH
 
 
@@ -1409,7 +1512,9 @@ def build_app() -> ASGIApp:
     will_emit = not boot_props.lifecycle_owned_by_main()
     fingerprint_props = collect_environment_fingerprint() if will_emit else {}
     inner_lifespan = app.router.lifespan_context
-    app.router.lifespan_context = _make_composed_lifespan(inner_lifespan, s, fingerprint_props)
+    app.router.lifespan_context = _make_composed_lifespan(
+        inner_lifespan, s, fingerprint_props
+    )
 
     # Outermost wrapper: observe 401/421/403 and emit auth_rejected (GAP#3). Pure
     # ASGI so streaming SSE is never buffered; the "lifespan" scope passes through

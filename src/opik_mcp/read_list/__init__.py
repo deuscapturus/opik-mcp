@@ -15,5 +15,6 @@ minimal.
 
 from opik_mcp.read_list.list_tool import run_list
 from opik_mcp.read_list.read_tool import run_read
+from opik_mcp.read_list.thread_transcript import run_thread_transcript
 
-__all__ = ["run_list", "run_read"]
+__all__ = ["run_list", "run_read", "run_thread_transcript"]

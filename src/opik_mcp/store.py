@@ -19,7 +19,7 @@ Workspace is the isolation boundary: reads never cross into another workspace's
 partition, so a single user pointing the same ``data_dir`` at different
 workspaces (or projects) over time can never commingle rows.
 
-Design mirrors the iris-palantir store: atomic writes (tmp file + ``os.replace``),
+Uses atomic writes (tmp file + ``os.replace``),
 glob-and-concat reads, and a small JSON state file updated via read-merge-write.
 
 pandas/pyarrow/duckdb are an OPTIONAL dependency (``opik-mcp[analytics]``). The

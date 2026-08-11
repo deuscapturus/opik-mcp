@@ -41,7 +41,8 @@ project, experiment, prompt, test_suite, thread. Composite reads (trace, prompt,
 thread) inline their child collections so one call usually gets the full picture. \
 For a thread, pass the thread link/URI or a project_id — read('thread', …) \
 returns the messages list, and list('thread', project_id=…) enumerates a \
-project's threads.
+project's threads. get_thread_transcript retrieves and caches all traces in a \
+LangChain thread, returning only a compact text transcript.
 - Direct writes — use when the user's intent is concrete and well-defined \
 ("score this trace 0.8 on helpfulness", "comment 'retry with temperature=0' \
 on span X"). Skip ask_ollie for these — narrower tools are faster and more \

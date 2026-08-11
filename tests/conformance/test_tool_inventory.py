@@ -18,6 +18,7 @@ EXPECTED_TOOLS: frozenset[str] = frozenset(
     {
         "read",
         "list",
+        "get_thread_transcript",
         "write",
         "schema",
         "ask_ollie",
